@@ -4,7 +4,6 @@ const mongoose = require("mongoose");
 
 //Schemas
 const UserSchema = require("../models/user");
-const CartSchema = require("../models/cart");
 const OrderSchema = require("../models/order");
 const ProductsSchema = require("../models/products");
 const categorySchema = require("../models/category");
@@ -300,14 +299,32 @@ async function getFeaturedProductCount(req, res) {
 }
 
 async function getAllOrders(req, res) {
-  const orderList = OrderSchema.find().limit(5);
-
+  const orderList = OrderSchema.find().limit(5).populate("users", "name").sort("{dateOrdered}: -1"); //the field after userId is to specify the fields you want to populate
+  //-1 in the sort sorts the order the list from the latest(last) to first
   if (!orderList) return res.status(500).json({ success: false });
 
   res.status(200).json({
     success: true,
     orders: orderList,
   });
+}
+
+
+
+async function getOneOrder(req, res){
+  let id = req.params.id
+
+  if(!id) return res.json({ message: "Invalid parameters"})
+
+  const order = await OrderSchema.findById(id).populate("users", "name").populate({  path: "orderItem", populate: "products"})
+  //By nesting the path in an object we are able to populate both the orderItem and the product inside the OrderItem
+
+  if(!order) return res.status(500).json({ status: false})
+
+  res.json({
+    status: "success",
+    order: order
+  })
 }
 
 async function createOrder(req, res) {
@@ -344,6 +361,207 @@ async function createOrder(req, res) {
   });
 }
 
+
+async function deleteOrder(req, res){
+  const id = req.params.id
+
+  if(!id) return res.status(400).json({  message: "Invalid parameter"})
+
+  try {
+    let deletedOrder = await OrderSchema.findByIdAndDelete(id)
+
+    if(!deletedOrder) return res.status(500).json({ message: "Invalid parameter"})
+
+    res.status(200).json({
+      status: "Successful",
+      message: "Order deleted succesfully"
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: "Internal server Error"
+    })
+  }
+}
+
+async function updateOrder(req, res){
+  const id = req.params.id
+
+  if(!id) return res.status(400).json({  message: "Invalid parameter"})
+
+  let updateInfo = Promise.all(
+    req.body.orderItem.map(async (order) => {
+      let newOrder = new OrderItem({
+        quantity: order.quantity,
+        product: order.product,
+      });
+      const orderRecieved = await newOrder.save();
+      return orderRecieved._id;
+    })
+  );
+
+  const resolvedOrders = await updateInfo
+
+  let orderUpdate = new OrderSchema({
+    userId: req.body.userId,
+    orderItem: resolvedOrders,
+    address: req.body.address,
+    phoneNumber: req.body.phoneNumber,
+    status: req.body.status,
+  });
+
+  try {
+    let updatedOrder = await OrderSchema.findByIdAndUpdate(id, orderUpdate, { new: true })
+
+    if(!updatedOrder) return res.status(500).json({ message: "Invalid parameter"})
+
+    res.status(200).json({
+      status: "Successful",
+      message: "Order updated succesfully",
+      order: updatedOrder
+    })
+  } catch (error) {
+    res.status(500).json({
+      message: "Internal server Error"
+    })
+  }
+}
+
+
+
+//Category
+const updateCategory = async(req, res) => {
+
+  const id = req.params.id
+  const { name, icon, color } = req.body
+
+  let updatedCategories = categorySchema.findByIdAndUpdate(
+      id,
+      {
+          name: name,
+          icon: icon,
+          color: color
+      }, 
+      {
+          new: save
+      }
+  )
+
+  if(!updatedCategories){
+      res.send({
+          success: false
+      })
+  }
+
+  await updatedCategories.save()
+  res.status(200).send({
+      success: true
+  })
+}
+
+const oneCategory = async(req, res) => {
+  const id = req.params.id
+
+  if(!id){
+      res.status(404).send({
+          message: "A valid id param must be provided"
+      })
+  }
+
+  try {
+      let oneCategory = await categorySchema.findById(id)
+
+      if(!oneCategory){
+          res.send({
+              status: false
+          })
+      }
+      res.send({
+          status: true,
+          category: oneCategory
+      })
+  } catch (error) {
+      console.log(error)
+      res.send({
+          status: error
+      })
+  }
+}
+
+
+
+const allCategories = async (req, res) => {
+
+  try {
+    const productCategory = await categorySchema.find().limit(5)
+
+    if(!productCategory){
+        res.send({
+            success: "failed"
+        })
+    }
+    res.status(200).send(productCategory)
+  } catch (error) {
+    console.log(error)
+    res.status(500).send({
+        status: error,
+        message: "Internal Server Error"
+    })
+}
+  }
+
+
+  const createCategory = async(req, res) => {
+    const { name, icon, color } = req.body
+
+    let newCategory =  new categorySchema({
+        name: name, 
+        icon: icon,
+        color: color
+    })
+
+    if(!newCategory){
+        res.send({
+            success: false
+        })
+    }
+
+    await newCategory.save()
+    res.status(200).send({
+        success: true
+    })
+}
+ 
+
+
+const deleteCategory = async(req, res) => {
+  const id = req.params.id
+
+  if(!id){
+      res.status(404).send({
+          message: "A valid id param must be provided"
+      })
+  }
+  try {
+      let deletedCategory = await categorySchema.findByIdAndDelete(id)
+      if(!deletedCategory){
+          res.send({
+              status: false,
+              message: "Invalid ID"
+          })
+      }
+      res.send({
+          status: true
+      })
+  } catch (error) {
+      console.log(error)
+      res.send({
+          status: error
+      })
+  }
+}
+
+
+
 module.exports = {
   signIn,
   signUp,
@@ -359,4 +577,12 @@ module.exports = {
   userCount,
   getAllOrders,
   createOrder,
+  getOneOrder,
+  deleteOrder,
+  updateOrder,
+  updateCategory,
+  oneCategory,
+  allCategories,
+  createCategory,
+  deleteCategory
 };
