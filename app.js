@@ -26,8 +26,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cors());
 app.options("*", cors());
-app.use(expressJwt());
-app.use(errorHandler());
+// app.use(expressJwt());
+// app.use(errorHandler());
 
 //Routes
 app.use("/user", userRouter);
@@ -43,7 +43,7 @@ app.get("/", (req, res) => {
 
 app.get("*", (req, res) => {
   res.status(404).json({
-    message: "Page note found",
+    message: "Page not found",
   });
 });
 app.listen(PORT, () => {

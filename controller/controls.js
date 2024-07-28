@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
 
 //Schemas
 const UserSchema = require("../models/user");
@@ -8,6 +8,7 @@ const CartSchema = require("../models/cart");
 const OrderSchema = require("../models/order");
 const ProductsSchema = require("../models/products");
 const categorySchema = require("../models/category");
+const OrderItem = require("../models/orderItem");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -16,11 +17,12 @@ async function signUp(req, res) {
     username: req.body.username,
     email: req.body.email,
     password: req.body.password,
-    isAdmin: req.body.isAdmin
+    isAdmin: req.body.isAdmin,
   });
   try {
-    const userCreated = await newUser.save()
-    if(!userCreated) return res.status(500).json({ message: "internal server error"})
+    const userCreated = await newUser.save();
+    if (!userCreated)
+      return res.status(500).json({ message: "internal server error" });
     const token = jwt.sign({ username: req.body.username }, JWT_SECRET, {
       expiresIn: "1hr",
     });
@@ -28,8 +30,8 @@ async function signUp(req, res) {
     res.status(200).json({
       status: "Success",
       user: userCreated,
-      token: token
-    })
+      token: token,
+    });
     res.cookie("token", token, { maxAge: 3600000 });
   } catch (error) {
     res.status(500).json({
@@ -54,9 +56,13 @@ async function signIn(req, res) {
           message: "Incorrect LogIn credentials",
         });
       }
-      const token = jwt.sign({ username: user.username, isAdmin: user.isAdmin }, SIGNIN_SECRET, {
-        expiresIn: "1h",
-      });
+      const token = jwt.sign(
+        { username: user.username, isAdmin: user.isAdmin },
+        SIGNIN_SECRET,
+        {
+          expiresIn: "1h",
+        }
+      );
       res.cookie("token", token, { maxAge: 3600000 });
       res.redirect("/");
     }
@@ -68,48 +74,46 @@ async function signIn(req, res) {
   }
 }
 
-
 async function getAllUsers(req, res) {
-  const allUsers = await UserSchema.find().select("-password").limit(5)
+  const allUsers = await UserSchema.find().select("-password").limit(5);
 
-  if(!allUsers) return res.status(500).json({ message: "Internal server error"})
+  if (!allUsers)
+    return res.status(500).json({ message: "Internal server error" });
 
-    res.status(200).send(allUsers)
+  res.status(200).send(allUsers);
 }
 
+async function getOneUser(req, res) {
+  const id = req.params.id;
 
-async function getOneUser(req, res){
-  const id = req.params.id
+  if (!id) return await UserSchema.find().select("-password").limit(5);
 
-  if(!id) return await UserSchema.find().select("-password").limit(5)
+  try {
+    let oneUser = await UserSchema.findById(id);
 
-    try {
-      let oneUser = await UserSchema.findById(id)
+    if (!oneUser)
+      return res.status(500).json({ message: "Internal server error" });
 
-      if(!oneUser) return res.status(500).json({message: "Internal server error"})
-
-        res.status(200).json({
-          user: oneUser
-        })
-    } catch (error) {
-      res.status(500).json({
-        message: "An internal server error occured while trying to retrive user",
-      });
-      console.log(error);
-    }
+    res.status(200).json({
+      user: oneUser,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "An internal server error occured while trying to retrive user",
+    });
+    console.log(error);
+  }
 }
 
 async function userCount(req, res) {
-  const userCount = await userSchema.countDocuments((count) => count)
+  const userCount = await userSchema.countDocuments((count) => count);
 
-  if(!userCount) return res.status(500).json({message: false})
+  if (!userCount) return res.status(500).json({ message: false });
 
-      res.json({
-
-          userCount: userCount
-      })
+  res.json({
+    userCount: userCount,
+  });
 }
-
 
 // async function updateUser(req, res){}
 
@@ -124,7 +128,7 @@ async function createProduct(req, res) {
     description: req.body.description,
     categories: req.body.categories,
     stockCount: req.body.stockCount,
-    featured: req.body.featured
+    featured: req.body.featured,
   });
   if (!newProduct) {
     res.send("Kindly input all fields");
@@ -148,13 +152,15 @@ async function findOneProduct(req, res) {
     res.status(401).json({ message: "provide a relevant _id" });
   }
 
-  if(!(mongoose.isValidObjectId(id))){
-    return res.json({ message: "Please enter a valid Id"})
-  } 
- // .select can be used to select fields we want to display with space between the parameter
- // to show where we are diffrentiating
+  if (!mongoose.isValidObjectId(id)) {
+    return res.json({ message: "Please enter a valid Id" });
+  }
+  // .select can be used to select fields we want to display with space between the parameter
+  // to show where we are diffrentiating
   try {
-    const productFound = await ProductsSchema.findOne({ _id: id }).select("title description");
+    const productFound = await ProductsSchema.findOne({ _id: id }).select(
+      "title description"
+    );
     if (!productFound) {
       res.json({
         message: "Product not found",
@@ -171,17 +177,20 @@ async function findOneProduct(req, res) {
 }
 
 const getAllProduct = async (req, res) => {
+  let filter = {};
+  if (req.query.categories) {
+    filter = { categories: req.query.categories.split(",") };
+  }
 
-    let filter = {}
-    if(req.query.categories){
-         filter = {categories: req.query.categories.split(",")}
-    }
+  const allProducts = await ProductsSchema.find(filter)
+    .populate("Category")
+    .sort({ title: -1 })
+    .limit(5)
+    .select("-_id");
 
-    const allProducts = await ProductsSchema.find(filter).populate("Category").sort({ title: -1 }).limit(5).select("-_id")
-
-    if(!allProducts) return res.status(500).json({message: "Internal Server Error"})    
-        res.send(allProducts)
-  
+  if (!allProducts)
+    return res.status(500).json({ message: "Internal Server Error" });
+  res.send(allProducts);
 };
 /*
 const productFilter = req.query.categories;
@@ -258,41 +267,81 @@ async function deleteProduct(req, res) {
   }
 }
 
-
 async function getCount(req, res) {
-    const productCount = await ProductsSchema.countDocuments((count) => count)
+  const productCount = await ProductsSchema.countDocuments((count) => count);
 
-    if(!productCount) return res.status(500).json({message: false})
+  if (!productCount) return res.status(500).json({ message: false });
 
-        res.json({
-
-            productCount: productCount
-        })
+  res.json({
+    productCount: productCount,
+  });
 }
 
-async function getFeaturedProducts(req, res){
-    const productCount = await ProductsSchema.find({ featured: true})
+async function getFeaturedProducts(req, res) {
+  const productCount = await ProductsSchema.find({ featured: true });
 
-    if(!productCount) return res.status(500).json({message: false})
+  if (!productCount) return res.status(500).json({ message: false });
 
-        res.send(product)
+  res.send(product);
 }
 
-async function getFeaturedProductCount(req, res){
-    const count = req.params.count ? req.params.count : 0
+async function getFeaturedProductCount(req, res) {
+  const count = req.params.count ? req.params.count : 0;
 
-    if(!count) return res.json({message: "Input all relevant fields"})
+  if (!count) return res.json({ message: "Input all relevant fields" });
 
-    const productCount = await ProductsSchema.find({ featured: true}).limit(+count)
+  const productCount = await ProductsSchema.find({ featured: true }).limit(
+    +count
+  );
 
-    //used + infront of count so as to convert the input string to an int   
+  //used + infront of count so as to convert the input string to an int
 
-        if(!product) return res.status(500).json({message: false})
+  if (!product) return res.status(500).json({ message: false });
+}
 
+async function getAllOrders(req, res) {
+  const orderList = OrderSchema.find().limit(5);
 
+  if (!orderList) return res.status(500).json({ success: false });
 
+  res.status(200).json({
+    success: true,
+    orders: orderList,
+  });
+}
 
+async function createOrder(req, res) {
+  let newOrderId = Promise.all(
+    req.body.orderItem.map(async (order) => {
+      let newOrder = new OrderItem({
+        quantity: order.quantity,
+        product: order.product,
+      });
+      const orderRecieved = await newOrder.save();
+      return orderRecieved._id;
+    })
+  );
 
+  const resolvedOrders = await newOrderId
+
+  let newOrder = new OrderSchema({
+    userId: req.body.userId,
+    orderItem: resolvedOrders,
+    address: req.body.address,
+    phoneNumber: req.body.phoneNumber,
+    status: req.body.status,
+  });
+
+  let order = newOrder.save();
+
+  if (!order) {
+    return res.status(400).send("order was not created");
+  }
+
+  res.json({
+    status: "success",
+    order: order,
+  });
 }
 
 module.exports = {
@@ -305,4 +354,9 @@ module.exports = {
   getAllProduct,
   deleteProduct,
   editProduct,
+  getFeaturedProducts,
+  getCount,
+  userCount,
+  getAllOrders,
+  createOrder,
 };
