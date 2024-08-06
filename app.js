@@ -9,6 +9,9 @@ require("dotenv").config();
 //Required
 const userRouter = require("./routes/user");
 const productRouter = require("./routes/product");
+const orderRouter = require("./routes/order")
+const qrCodeRouter = require("./routes/qrcode")
+const paymentRouter = require("./routes/payment")
 const expressJwt = require("./middleware/auth");
 const errorHandler = require("./middleware/error-handles");
 
@@ -26,12 +29,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cors());
 app.options("*", cors());
-// app.use(expressJwt());
-// app.use(errorHandler());
+app.use(expressJwt());
+app.use(errorHandler());
+app.use(express.static("public/image"))
 
 //Routes
 app.use("/user", userRouter);
 app.use("/product", productRouter);
+app.use("/order", orderRouter)
+app.use("/payment", paymentRouter)
+app.use("/qrcode", qrCodeRouter)
 
 const PORT = process.env.PORT || 4200;
 

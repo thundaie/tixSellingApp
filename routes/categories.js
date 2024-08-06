@@ -7,7 +7,7 @@ const {
   createCategory,
   deleteCategory,
 } = require("../controller/controls");
-const category = require("../models/category");
+
 
 router.get("/", allCategories);
 

@@ -1,42 +1,47 @@
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
 
-const orderSchema = new mongoose.Schema({
+const orderSchema = new mongoose.Schema(
+  {
     userId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "users",
-        required: true,
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "users",
+      required: true,
     },
-    orderItem: [{
+    orderItem: [
+      {
         type: mongoose.Schema.Types.ObjectId,
         ref: "orderItem",
-        required: true
-    }],
+        required: true,
+      },
+    ],
     address: {
-        type: String
+      type: String,
     },
     phoneNumber: {
-        type: String,
-        required: true
+      type: String,
+      required: true,
     },
     status: {
-        type: String,
-        default: "Pending"
+      type: String,
+      default: "Pending",
+    },
+    totalPrice: {
+      type: Number,
     },
     dateOrdered: {
-        type: Date,
-        default: Date.now
-    }
-}, 
-{ timestamps: true })
+      type: Date,
+      default: Date.now,
+    },
+  },
+  { timestamps: true }
+);
 
 orderSchema.virtual("id").get(function () {
-    return this._id.toHexString()
-})
+  return this._id.toHexString();
+});
 
 orderSchema.set("toJSON", {
-    virtuals: true
-})
+  virtuals: true,
+});
 
-
-
-module.exports = mongoose.model("orders", orderSchema)
+module.exports = mongoose.model("orders", orderSchema);

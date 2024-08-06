@@ -5,7 +5,7 @@ const router = require("express").Router()
 router.get("/", (req, res) => {
     const bodyPayload = req.body
 
-    qrCode.toDataURL(bodyPayload, (err, data) => {
+    qrCode.toDataURL(bodyPayload, { errorCorrectionLevel: 'H' }, function(err, data) {
         if(err){
             console.log(err)
             res.json({

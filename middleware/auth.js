@@ -10,7 +10,11 @@ function authJwt(){
         isRevoked: isRevoked //TO check for admin
     }).unless({
         path: [
-            {url: "", methods: ["GET", "OPTIONS"]}
+            {url: "getall", methods: ["GET", "OPTIONS"]},
+            {url: "categories", methods: ['GET', 'OPTIONS']},
+            {url: "images", methods: ["GET", "OPTIONS"]},
+            `LOGIN PAGE`,
+            `REGISTER PAGE`
         ]
     })
 }

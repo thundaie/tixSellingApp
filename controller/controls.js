@@ -1,6 +1,7 @@
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const mongoose = require("mongoose");
+const multer = require("multer")
 
 //Schemas
 const UserSchema = require("../models/user");
@@ -11,6 +12,40 @@ const OrderItem = require("../models/orderItem");
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+
+//Multer config for saving images
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    const isValid = file_types_allowed[file.mimetype]
+    let uploadError = new Error('Invalid image type')
+    if(isValid) {
+      uploadError = null
+    }  
+    cb(uploadError, 'public/uploads')
+  }, 
+  filename: function (req, file, cb) {
+    const fileName = file.originalname.split(" ").join("-")
+    const fileExtension = file_types_allowed[file.mimetype]
+    cb(null, `${fileName} + '-' + ${Date.now()}.${fileExtension}`)
+  }
+})
+
+const upload = multer({ storage: storage })
+
+//Infuse into product post request upload.single('image')
+
+//MIMe types are used for file extension
+
+const file_types_allowed = {
+  "images/png": "png",
+  "images/jpeg": "jpeg",
+  "images/jpg": "jpg"
+}
+
+
+
+//USERS
 async function signUp(req, res) {
   const newUser = new UserSchema({
     username: req.body.username,
@@ -114,18 +149,26 @@ async function userCount(req, res) {
   });
 }
 
-// async function updateUser(req, res){}
+//PRODUCT
 
 async function createProduct(req, res) {
   const category = await categorySchema.findById(req.body.categories);
 
   if (!category) return res.status(400).json({ message: "Invalid Category" });
 
+
+  const file = req.file //TO check if file exists
+
+  if(!file) return res.status(400).send("No image in request ")
+  const fileName = file.fileName
+  const basePath = `${req.protocol}://${req.get('host')}/public/upload/` //req.protocol serves http, req.get('host'), serves localhost: PORT
+
   const newProduct = new ProductsSchema({
     title: req.body.title,
     price: req.body.price,
     description: req.body.description,
     categories: req.body.categories,
+    image: `${basePath}${fileName}`, //Translates to http://localhost:3000/public/upload
     stockCount: req.body.stockCount,
     featured: req.body.featured,
   });
@@ -142,6 +185,29 @@ async function createProduct(req, res) {
       message: "An error occured while trying to create your product",
     });
   }
+}
+
+//to update an image
+
+async function updateImage(req, res){
+  if(!mongoose.isValidObjectId(req.params.id)){
+    return res.status(400).send("Invalid Product Id")
+  }
+
+  const id = req.params.id
+  const files = req.files
+  let imagePath = []
+  const basePath = `${req.protocol}://${req.get('host')}/public/upload/`
+
+  if(files) {
+    files.map(file => {
+      imagePath.push(`${basePath}${file.filename}`)
+    })
+  }
+
+  const product = await ProductsSchema.findOneAndUpdate(id, {
+    images: imagePath
+  }, { new: true })
 }
 
 async function findOneProduct(req, res) {
@@ -295,11 +361,18 @@ async function getFeaturedProductCount(req, res) {
 
   //used + infront of count so as to convert the input string to an int
 
-  if (!product) return res.status(500).json({ message: false });
+  if (!productCount) return res.status(500).json({ message: false });
+
+  return res.status(200).json({ featuredCount: productCount });
 }
 
+//ORDERS
+
 async function getAllOrders(req, res) {
-  const orderList = OrderSchema.find().limit(5).populate("users", "name").sort("{dateOrdered}: -1"); //the field after userId is to specify the fields you want to populate
+  const orderList = OrderSchema.find()
+    .limit(5)
+    .populate("users", "name")
+    .sort("{dateOrdered}: -1"); //the field after userId is to specify the fields you want to populate
   //-1 in the sort sorts the order the list from the latest(last) to first
   if (!orderList) return res.status(500).json({ success: false });
 
@@ -309,22 +382,22 @@ async function getAllOrders(req, res) {
   });
 }
 
+async function getOneOrder(req, res) {
+  let id = req.params.id;
 
+  if (!id) return res.json({ message: "Invalid parameters" });
 
-async function getOneOrder(req, res){
-  let id = req.params.id
-
-  if(!id) return res.json({ message: "Invalid parameters"})
-
-  const order = await OrderSchema.findById(id).populate("users", "name").populate({  path: "orderItem", populate: "products"})
+  const order = await OrderSchema.findById(id)
+    .populate("users", "name")
+    .populate({ path: "orderItem", populate: "products" });
   //By nesting the path in an object we are able to populate both the orderItem and the product inside the OrderItem
 
-  if(!order) return res.status(500).json({ status: false})
+  if (!order) return res.status(500).json({ status: false });
 
   res.json({
     status: "success",
-    order: order
-  })
+    order: order,
+  });
 }
 
 async function createOrder(req, res) {
@@ -339,7 +412,21 @@ async function createOrder(req, res) {
     })
   );
 
-  const resolvedOrders = await newOrderId
+  const resolvedOrders = await newOrderId;
+
+  const totalPrices = await Promise.all(
+    resolvedOrders.map(async (allOrders) => {
+      const orderItem = await OrderItem.findById(allOrders).populate(
+        "products",
+        "price"
+      ); //Helps us find the price
+      let subTotal = orderItem.product.price * orderItem.quantity;
+
+      return subTotal;
+    })
+  );
+
+  const total = totalPrices.reduce((a, b) => a + b, 0); //The total prices returns an array and the reduce function adds it back.
 
   let newOrder = new OrderSchema({
     userId: req.body.userId,
@@ -347,6 +434,7 @@ async function createOrder(req, res) {
     address: req.body.address,
     phoneNumber: req.body.phoneNumber,
     status: req.body.status,
+    totalPrice: total,
   });
 
   let order = newOrder.save();
@@ -361,206 +449,239 @@ async function createOrder(req, res) {
   });
 }
 
+async function totalSales(req, res) {
+  const totalSales = await OrderSchema.aggregate([
+    { $group: { _id: null, totalSales: { $sum: "$totalPrice" } } },
+  ]);
 
-async function deleteOrder(req, res){
+  if (!totalSales) {
+    return res.status(400).json({ nessage: "Total sales cannot be retrived" });
+  }
+
+  return res.status(200).json({
+    totalSales: totalSales.pop().totalSales, //.pop gets the first of the array since the aggregate returns an array
+  });
+}
+
+async function orderCount(req, res) {
+  const orderNumber = await OrderSchema.countDocuments((count) => count);
+
+  if (!orderNumber) return res.status(500).json({ status: false });
+
+  res.status(200).json({
+    orderCount: orderNumber,
+  });
+}
+
+async function getSingleUserOrder(req, res){
   const id = req.params.id
 
-  if(!id) return res.status(400).json({  message: "Invalid parameter"})
+  if(!id) return res.status(400).json({ message: "Provide relevant parameters" })
+
+  const singleOrder = OrderItem.find({ _id: id }).populate({
+    path: "orderItem", populate: {
+      path: "products", populate: "Category"
+    }
+  }).sort({ "dateOrdered": -1 })
+
+
+  if(!singleOrder) return res.status(400).json({success: false})
+
+  return res.status(200).json({ order: singleOrder })
+}
+
+async function deleteOrder(req, res) {
+  const id = req.params.id;
+
+  if (!id) return res.status(400).json({ message: "Invalid parameter" });
 
   try {
-    let deletedOrder = await OrderSchema.findByIdAndDelete(id)
+    let deletedOrder = await OrderSchema.findByIdAndDelete(id).then(
+      async (order) => {
+        if (order) {
+          await order.orderItem.map(async (orderItems) => {
+            await OrderItem.findByIdAndDelete(orderItems);
+          });
+          return res.status(200).json({ message: "Order deleted succesfully" });
+        } else {
+          return res.status(404).json({ success: false });
+        }
+      }
+    );
 
-    if(!deletedOrder) return res.status(500).json({ message: "Invalid parameter"})
+    if (!deletedOrder)
+      return res
+        .status(500)
+        .json({ message: "An error occured while trying to delete" });
 
     res.status(200).json({
       status: "Successful",
-      message: "Order deleted succesfully"
-    })
+      message: "Order deleted succesfully",
+    });
   } catch (error) {
     res.status(500).json({
-      message: "Internal server Error"
-    })
+      message: "Internal server Error",
+    });
   }
 }
 
-async function updateOrder(req, res){
-  const id = req.params.id
+async function updateOrder(req, res) {
+  const id = req.params.id;
 
-  if(!id) return res.status(400).json({  message: "Invalid parameter"})
+  if (!id) return res.status(400).json({ message: "Invalid parameter" });
 
-  let updateInfo = Promise.all(
-    req.body.orderItem.map(async (order) => {
-      let newOrder = new OrderItem({
-        quantity: order.quantity,
-        product: order.product,
-      });
-      const orderRecieved = await newOrder.save();
-      return orderRecieved._id;
-    })
-  );
-
-  const resolvedOrders = await updateInfo
-
-  let orderUpdate = new OrderSchema({
-    userId: req.body.userId,
-    orderItem: resolvedOrders,
-    address: req.body.address,
-    phoneNumber: req.body.phoneNumber,
+  let orderUpdate = {
     status: req.body.status,
-  });
+  };
 
   try {
-    let updatedOrder = await OrderSchema.findByIdAndUpdate(id, orderUpdate, { new: true })
+    let updatedOrder = await OrderSchema.findByIdAndUpdate(id, orderUpdate, {
+      new: true,
+    });
 
-    if(!updatedOrder) return res.status(500).json({ message: "Invalid parameter"})
+    if (!updatedOrder)
+      return res.status(500).json({ message: "Invalid parameter" });
 
     res.status(200).json({
       status: "Successful",
       message: "Order updated succesfully",
-      order: updatedOrder
-    })
+      order: updatedOrder,
+    });
   } catch (error) {
     res.status(500).json({
-      message: "Internal server Error"
-    })
+      message: "Internal server Error",
+    });
   }
 }
 
-
-
-//Category
-const updateCategory = async(req, res) => {
-
-  const id = req.params.id
-  const { name, icon, color } = req.body
+//CATEGORY
+const updateCategory = async (req, res) => {
+  const id = req.params.id;
+  const { name, icon, color } = req.body;
 
   let updatedCategories = categorySchema.findByIdAndUpdate(
-      id,
-      {
-          name: name,
-          icon: icon,
-          color: color
-      }, 
-      {
-          new: save
-      }
-  )
+    id,
+    {
+      name: name,
+      icon: icon,
+      color: color,
+    },
+    {
+      new: save,
+    }
+  );
 
-  if(!updatedCategories){
-      res.send({
-          success: false
-      })
+  if (!updatedCategories) {
+    res.send({
+      success: false,
+    });
   }
 
-  await updatedCategories.save()
+  await updatedCategories.save();
   res.status(200).send({
-      success: true
-  })
-}
+    success: true,
+  });
+};
 
-const oneCategory = async(req, res) => {
-  const id = req.params.id
+const oneCategory = async (req, res) => {
+  const id = req.params.id;
 
-  if(!id){
-      res.status(404).send({
-          message: "A valid id param must be provided"
-      })
+  if (!id) {
+    res.status(404).send({
+      message: "A valid id param must be provided",
+    });
   }
 
   try {
-      let oneCategory = await categorySchema.findById(id)
+    let oneCategory = await categorySchema.findById(id);
 
-      if(!oneCategory){
-          res.send({
-              status: false
-          })
-      }
+    if (!oneCategory) {
       res.send({
-          status: true,
-          category: oneCategory
-      })
+        status: false,
+      });
+    }
+    res.send({
+      status: true,
+      category: oneCategory,
+    });
   } catch (error) {
-      console.log(error)
-      res.send({
-          status: error
-      })
+    console.log(error);
+    res.send({
+      status: error,
+    });
   }
-}
-
-
+};
 
 const allCategories = async (req, res) => {
-
   try {
-    const productCategory = await categorySchema.find().limit(5)
+    const productCategory = await categorySchema.find().limit(5);
 
-    if(!productCategory){
-        res.send({
-            success: "failed"
-        })
+    if (!productCategory) {
+      res.send({
+        success: "failed",
+      });
     }
-    res.status(200).send(productCategory)
+    res.status(200).send(productCategory);
   } catch (error) {
-    console.log(error)
+    console.log(error);
     res.status(500).send({
-        status: error,
-        message: "Internal Server Error"
-    })
-}
+      status: error,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+const createCategory = async (req, res) => {
+  const { name, icon, color } = req.body;
+
+  let newCategory = new categorySchema({
+    name: name,
+    icon: icon,
+    color: color,
+  });
+
+  if (!newCategory) {
+    res.send({
+      success: false,
+    });
   }
 
+  await newCategory.save();
+  res.status(200).send({
+    success: true,
+  });
+};
 
-  const createCategory = async(req, res) => {
-    const { name, icon, color } = req.body
+const deleteCategory = async (req, res) => {
+  const id = req.params.id;
 
-    let newCategory =  new categorySchema({
-        name: name, 
-        icon: icon,
-        color: color
-    })
-
-    if(!newCategory){
-        res.send({
-            success: false
-        })
-    }
-
-    await newCategory.save()
-    res.status(200).send({
-        success: true
-    })
-}
- 
-
-
-const deleteCategory = async(req, res) => {
-  const id = req.params.id
-
-  if(!id){
-      res.status(404).send({
-          message: "A valid id param must be provided"
-      })
+  if (!id) {
+    res.status(404).send({
+      message: "A valid id param must be provided",
+    });
   }
   try {
-      let deletedCategory = await categorySchema.findByIdAndDelete(id)
-      if(!deletedCategory){
-          res.send({
-              status: false,
-              message: "Invalid ID"
-          })
-      }
+    let deletedCategory = await categorySchema.findByIdAndDelete(id);
+    if (!deletedCategory) {
       res.send({
-          status: true
-      })
+        status: false,
+        message: "Invalid ID",
+      });
+    }
+    res.send({
+      status: true,
+    });
   } catch (error) {
-      console.log(error)
-      res.send({
-          status: error
-      })
+    console.log(error);
+    res.send({
+      status: error,
+    });
   }
-}
+};
 
 
+
+//
 
 module.exports = {
   signIn,
@@ -573,16 +694,21 @@ module.exports = {
   deleteProduct,
   editProduct,
   getFeaturedProducts,
+  getFeaturedProductCount,
   getCount,
   userCount,
+  totalSales,
+  orderCount,
   getAllOrders,
   createOrder,
   getOneOrder,
+  getSingleUserOrder,
   deleteOrder,
   updateOrder,
   updateCategory,
   oneCategory,
   allCategories,
   createCategory,
-  deleteCategory
+  deleteCategory,
+  updateImage
 };
