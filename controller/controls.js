@@ -2,6 +2,11 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const mongoose = require("mongoose");
 const multer = require("multer")
+const axios = require("axios");
+const QRCode = require("qrcode");
+const nodeMailer = require("nodemailer")
+const { v4: uuidv4 } = require("uuid")
+const bcrypt = require("bcrypt")
 
 //Schemas
 const UserSchema = require("../models/user");
@@ -9,9 +14,34 @@ const OrderSchema = require("../models/order");
 const ProductsSchema = require("../models/products");
 const categorySchema = require("../models/category");
 const OrderItem = require("../models/orderItem");
+const userVerification = require("../models/newVerification")
 
+
+//ENV files
 const JWT_SECRET = process.env.JWT_SECRET;
+const testKey = process.env.TEST_SECRET_KEY;
+const authenticationEmail = process.env.AUTH_EMAIL
+const authenticationPassword = process.env.AUTH_PASSWORD
 
+
+//Transporter for the mail recovery setup
+
+const transporter = nodeMailer.createTransport({
+  service: "outlook",
+  auth: {
+    user: authenticationEmail,
+    pass: authenticationPassword
+  }
+})
+
+
+//testing the transporter
+transporter.verify((err, data) => {
+  if(err){
+    return console.log(`an error occured. \n ${err}`)
+  }
+  console.log("transporter ready")
+})
 
 //Multer config for saving images
 
@@ -43,6 +73,51 @@ const file_types_allowed = {
   "images/jpg": "jpg"
 }
 
+//Email Verification
+sendVerificationEmail = async ({_id, email}, res) => {
+  //URL to be used in the mail we're sending out
+  const currentUrl = `http://localhost:${process.env.PORT}`
+
+  const uniqueString = uuidv4() + _id
+
+  const mailOptions = {
+    from: authenticationEmail,
+    to: email,
+    subject: "Verify your email",
+    html: `<p>VErify your email address to complete your signUp</p>
+            <p>Link expires in <b>5 minutes</b></p>
+            <p>press <a href=${currentUrl + "user/verify/" + _id + "/" + uniqueString}> here</a></p>`
+  }
+
+  //Before saving, the uniqueValue has to be hashed and saved
+  try {
+   const savedUnique = await bcrypt.hash(uniqueString, 10)
+   if(!savedUnique) return console.log("Error while trying to save unique String")
+
+    const newVerification = new userVerification({
+      userId: _id,
+      uniqueString: savedUnique,
+      createdAt: Date.now(),
+      expiresIn: Date.now() + 21600000
+    })
+
+   await newVerification.save()
+
+    await transporter.sendMail(mailOptions, (err) => {
+      if(err){
+        console.log(err)
+        return res.status(500).json({
+          message: "Error sending out confirmation email"
+        })
+      }
+      return res.status(200).json({
+        message: "Please chech your email address to confirm signUp"
+      })
+    })
+  } catch (error) {
+    console.log(error)
+  }
+}
 
 
 //USERS
@@ -55,12 +130,14 @@ async function signUp(req, res) {
   });
   try {
     const userCreated = await newUser.save();
-    if (!userCreated)
+    if (!userCreated){
       return res.status(500).json({ message: "internal server error" });
+    }
     const token = jwt.sign({ username: req.body.username }, JWT_SECRET, {
       expiresIn: "1hr",
     });
     console.log("user Saved");
+    sendVerificationEmail(userCreated, res)
     res.status(200).json({
       status: "Success",
       user: userCreated,
@@ -681,7 +758,121 @@ const deleteCategory = async (req, res) => {
 
 
 
-//
+//PAYSTACK
+const initiateTransaction = async (req, res) => {
+  const id = req.params.id;
+  const basePath = `${req.protocol}://${req.get("host")}`;
+
+  const userOrder = `${basePath}/order/${id}`;
+
+  try {
+    //fetch order details from the order API
+    const orderResponse = await axios.get(userOrder);
+
+    const { email, amount } = orderResponse.data;
+
+    // Initialize the Paystack transaction
+    const paystackResponse = await axios.post(
+      "https://api.paystack.co/transaction/initialize",
+      {
+        email,
+        amount: amount * 100, // Amount in kobo
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${testKey}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const { data } = paystackResponse.data;
+
+    // Generate the QR code
+    const qrCodeDataUrl = await QRCode.toDataURL(
+      data.authorization_url,
+      { errorCorrectionLevel: "H" },
+      (err, data) => {
+        if (err) {
+          res
+            .status(500)
+            .send("An error occured while trying to generate QRCode");
+          console.log(err);
+        }
+        return data;
+      }
+    );
+
+    res.json({
+      status: "success",
+      message: "Payment initialized successfully",
+      data: {
+        authorization_url: data.authorization_url,
+        qr_code: qrCodeDataUrl,
+      },
+    });
+  } catch (error) {
+    console.error("Error initializing payment:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Could not initialize payment",
+    });
+  }
+};
+
+
+const verifyTransaction = async (req, res) => {
+  const { reference, orderId } = req.body;
+
+  try {
+    // Verify the Paystack transaction
+    const verifyResponse = await axios.get(
+      `https://api.paystack.co/transaction/verify/${reference}`,
+      {
+        headers: {
+          Authorization: `Bearer ${testKey}`,
+        },
+      }
+    );
+
+    const { data } = verifyResponse.data;
+
+    if (data.status === "success") {
+      // Payment was successful, generate QR code
+      const qrCodeDataUrl = await QRCode.toDataURL(data.authorization_url, { errorCorrectionLevel: 'H' }, (err, data) => {
+        if(err){
+          console.log(err)
+          return res.status(500).send("An error occured while generating qrcode")
+        } 
+        return data
+
+      });
+
+      res.json({
+        status: "success",
+        message: "Payment verified successfully",
+        data: {
+          qr_code: qrCodeDataUrl,
+        },
+      });
+    } else {
+      res.status(400).json({
+        status: "error",
+        message: "Payment verification failed",
+      });
+    }
+  } catch (error) {
+    console.error("Error verifying payment:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Could not verify payment",
+    });
+  }
+};
+
+
+
+
 
 module.exports = {
   signIn,
@@ -710,5 +901,7 @@ module.exports = {
   allCategories,
   createCategory,
   deleteCategory,
-  updateImage
+  updateImage,
+  initiateTransaction,
+  verifyTransaction
 };

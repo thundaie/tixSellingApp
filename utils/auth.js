@@ -4,7 +4,7 @@ require("dotenv").config()
 
 async function authenticate(req, res, next){
     const token = res.cookie["token"]
-
+    
     if(!token){
         res.json({
             message: "You have to be signed In to access this route"
