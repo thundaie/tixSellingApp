@@ -1,12 +1,13 @@
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const mongoose = require("mongoose");
-const multer = require("multer")
+const multer = require("multer");
 const axios = require("axios");
 const QRCode = require("qrcode");
-const nodeMailer = require("nodemailer")
-const { v4: uuidv4 } = require("uuid")
-const bcrypt = require("bcrypt")
+const nodeMailer = require("nodemailer");
+const { v4: uuidv4 } = require("uuid");
+const bcrypt = require("bcrypt");
+const path = require("path");
 
 //Schemas
 const UserSchema = require("../models/user");
@@ -14,15 +15,15 @@ const OrderSchema = require("../models/order");
 const ProductsSchema = require("../models/products");
 const categorySchema = require("../models/category");
 const OrderItem = require("../models/orderItem");
-const userVerification = require("../models/newVerification")
-
+const userVerification = require("../models/newVerification");
+const passwordResetSchema = require("../models/passwordReset");
+const { error } = require("console");
 
 //ENV files
 const JWT_SECRET = process.env.JWT_SECRET;
 const testKey = process.env.TEST_SECRET_KEY;
-const authenticationEmail = process.env.AUTH_EMAIL
-const authenticationPassword = process.env.AUTH_PASSWORD
-
+const authenticationEmail = process.env.AUTH_EMAIL;
+const authenticationPassword = process.env.AUTH_PASSWORD;
 
 //Transporter for the mail recovery setup
 
@@ -30,38 +31,36 @@ const transporter = nodeMailer.createTransport({
   service: "outlook",
   auth: {
     user: authenticationEmail,
-    pass: authenticationPassword
-  }
-})
-
+    pass: authenticationPassword,
+  },
+});
 
 //testing the transporter
 transporter.verify((err, data) => {
-  if(err){
-    return console.log(`an error occured. \n ${err}`)
+  if (err) {
+    return console.log(`an error occured. \n ${err}`);
   }
-  console.log("transporter ready")
-})
+  console.log("transporter ready");
+});
 
 //Multer config for saving images
-
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const isValid = file_types_allowed[file.mimetype]
-    let uploadError = new Error('Invalid image type')
-    if(isValid) {
-      uploadError = null
-    }  
-    cb(uploadError, 'public/uploads')
-  }, 
+    const isValid = file_types_allowed[file.mimetype];
+    let uploadError = new Error("Invalid image type");
+    if (isValid) {
+      uploadError = null;
+    }
+    cb(uploadError, "public/uploads");
+  },
   filename: function (req, file, cb) {
-    const fileName = file.originalname.split(" ").join("-")
-    const fileExtension = file_types_allowed[file.mimetype]
-    cb(null, `${fileName} + '-' + ${Date.now()}.${fileExtension}`)
-  }
-})
+    const fileName = file.originalname.split(" ").join("-");
+    const fileExtension = file_types_allowed[file.mimetype];
+    cb(null, `${fileName} + '-' + ${Date.now()}.${fileExtension}`);
+  },
+});
 
-const upload = multer({ storage: storage })
+const upload = multer({ storage: storage });
 
 //Infuse into product post request upload.single('image')
 
@@ -70,15 +69,15 @@ const upload = multer({ storage: storage })
 const file_types_allowed = {
   "images/png": "png",
   "images/jpeg": "jpeg",
-  "images/jpg": "jpg"
-}
+  "images/jpg": "jpg",
+};
 
 //Email Verification
-sendVerificationEmail = async ({_id, email}, res) => {
+sendVerificationEmail = async ({ _id, email }, res) => {
   //URL to be used in the mail we're sending out
-  const currentUrl = `http://localhost:${process.env.PORT}`
+  const currentUrl = `http://localhost:${process.env.PORT}`;
 
-  const uniqueString = uuidv4() + _id
+  const uniqueString = uuidv4() + _id;
 
   const mailOptions = {
     from: authenticationEmail,
@@ -86,38 +85,110 @@ sendVerificationEmail = async ({_id, email}, res) => {
     subject: "Verify your email",
     html: `<p>VErify your email address to complete your signUp</p>
             <p>Link expires in <b>5 minutes</b></p>
-            <p>press <a href=${currentUrl + "user/verify/" + _id + "/" + uniqueString}> here</a></p>`
-  }
+            <p>press <a href=${
+              currentUrl + "user/verify/" + _id + "/" + uniqueString
+            }> here</a></p>`,
+  };
 
   //Before saving, the uniqueValue has to be hashed and saved
   try {
-   const savedUnique = await bcrypt.hash(uniqueString, 10)
-   if(!savedUnique) return console.log("Error while trying to save unique String")
+    const savedUnique = await bcrypt.hash(uniqueString, 10);
+    if (!savedUnique)
+      return console.log("Error while trying to save unique String");
 
     const newVerification = new userVerification({
       userId: _id,
       uniqueString: savedUnique,
       createdAt: Date.now(),
+      expiresIn: Date.now() + 21600000,
+    });
+
+    await newVerification.save();
+
+    await transporter.sendMail(mailOptions, (err) => {
+      if (err) {
+        console.log(err);
+        return res.status(500).json({
+          message: "Error sending out confirmation email",
+        });
+      }
+      return res.status(200).json({
+        status: "PENDING",
+        message: "Check your email address to confirm signUp",
+      });
+    });
+  } catch (error) {
+    console.log(error);
+    res.json({
+      status: "FAILED",
+      message: "Email verification failed",
+    });
+  }
+};
+//REset Email
+
+async function sendResetEmail({_id, email}, res){
+  const currentUrl = `http://localhost:${process.env.PORT}`;
+
+  const resetString = uuidv4() + _id
+
+  const mailOptions = {
+    from: authenticationEmail,
+    to: email,
+    subject: "Verify your email",
+    html: `<p>VErify your email address to complete your signUp</p>
+            <p>Link expires in <b>5 minutes</b></p>
+            <p>press <a href=${
+              currentUrl + "user/reset-password/" + _id + "/" + resetString
+            }> here</a></p>`,
+  };
+
+  //hashing resetString
+
+  try {
+    const savedReset = await bcrypt.hash(resetString, 10)
+    if(!savedReset){
+      res.status(500).json({
+        message: "Internal server error occured while saving reset String"
+      })
+    }
+
+    const newReset = new passwordResetSchema({
+      userId: _id,
+      resetString: savedReset,
+      createdAt: Date.now(),
       expiresIn: Date.now() + 21600000
     })
 
-   await newVerification.save()
-
-    await transporter.sendMail(mailOptions, (err) => {
-      if(err){
-        console.log(err)
-        return res.status(500).json({
-          message: "Error sending out confirmation email"
-        })
-      }
-      return res.status(200).json({
-        message: "Please chech your email address to confirm signUp"
+    await newReset.save()
+    .then(
+      await transporter.sendMail(mailOptions, (err) => {
+        if(err){
+          console.log(err);
+          return res.status(500).json({
+            message: "Error sending out confirmation email",
+          });
+        }
+        return res.status(200).json({
+          status: "PENDING",
+          message: "Check your email address to complete reset",
+        });
       })
-    })
+    )
   } catch (error) {
-    console.log(error)
+    console.log(error);
+    res.json({
+      status: "FAILED",
+      message: "Email reset failed",
+    });
+    
   }
+
+
+
+
 }
+
 
 
 //USERS
@@ -127,17 +198,18 @@ async function signUp(req, res) {
     email: req.body.email,
     password: req.body.password,
     isAdmin: req.body.isAdmin,
+    verified: false,
   });
   try {
     const userCreated = await newUser.save();
-    if (!userCreated){
+    if (!userCreated) {
       return res.status(500).json({ message: "internal server error" });
     }
     const token = jwt.sign({ username: req.body.username }, JWT_SECRET, {
       expiresIn: "1hr",
     });
     console.log("user Saved");
-    sendVerificationEmail(userCreated, res)
+    sendVerificationEmail(userCreated, res);
     res.status(200).json({
       status: "Success",
       user: userCreated,
@@ -152,6 +224,62 @@ async function signUp(req, res) {
   }
 }
 
+async function verifyUser(req, res) {
+  const { userId, uniqueString } = req.params;
+
+  let verifiedUser = userVerification.find({ userId });
+
+  if (!verifiedUser) {
+    res.status(401).send({
+      message:
+        "Account record not available or you have been verified previously\nSign Up or Sign In",
+    });
+  }
+
+  let { expiresIn } = verifiedUser;
+
+  if (expiresIn < Date.now()) {
+    await userVerification
+      .deleteOne({ userId })
+      .then(await UserSchema.deleteOne({ _id: userId }));
+    res.status(200).json({
+      message: "The verification link has expired",
+    });
+  }
+
+  let hashedUniqueString = verifiedUser.uniqueString;
+
+  const compareStrings = await bcrypt.compareSync(
+    uniqueString,
+    hashedUniqueString
+  );
+
+  if (!compareStrings) return res.json({ message: "Invalid unique string" });
+  else
+    await UserSchema.updateOne(
+      { _id: userId },
+      { verified: true },
+      (err, data) => {
+        if (err) console.log(err);
+        console.log("updated successfully");
+      }
+    ).then(
+      await userVerification
+        .findByIdAndDelete(userId)
+        .then(res.status(200).redirect("/verified"))
+        .catch((err) => {
+          console.log(err);
+          res.status(500).json({
+            message: "Internal server error",
+          });
+        })
+    );
+}
+
+async function verifiedUser(req, res) {
+  res.sendFile(path.join(__dirname, "./../views/verified.html"));
+}
+
 async function signIn(req, res) {
   const { username, password } = req.body;
   try {
@@ -162,10 +290,17 @@ async function signIn(req, res) {
 
       const user = await UserSchema.findOne({ username: username });
 
+      
+
       if (!user || !UserSchema.comparePassword(password)) {
         res.json({
           message: "Incorrect LogIn credentials",
         });
+      }
+      if(user.verified === false){
+        return res.status(403).json({
+          message: "Please check your mail and verify user"
+        })
       }
       const token = jwt.sign(
         { username: user.username, isAdmin: user.isAdmin },
@@ -226,6 +361,91 @@ async function userCount(req, res) {
   });
 }
 
+//Password Reset
+
+async function passwordReset(req, res) {
+  const userMail = req.body.email
+
+  let userFound = await UserSchema.findOne({ email: userMail })
+
+  if(!userFound){
+    res.status(401).json({
+      message: "Invsalid credentials provided, Please sign Up"
+    })
+  }
+
+  sendResetEmail(userFound, res)
+}
+
+
+async function verifyPasswordReset(req, res){
+  const { userId, resetString } = req.params;
+  const password = req.body.password
+
+  let passwordResetUser = passwordResetSchema.findById(userId)
+
+  if(!passwordResetUser){
+    res.status(403).json({
+      message:
+        "Account reset record not available or you have yet to initiate reset previously\n Reset or Sign In",
+    }).redirect("/reset-password");
+  }
+
+  let { expiresIn } = passwordResetUser
+
+  if(expiresIn < Date.now()){
+    await passwordResetSchema.deleteOne({ userId })
+    res.json({
+      message: "Password Verification link has expired"
+    })
+  }
+
+  let hashedResetString = { resetString } = passwordResetUser
+
+  const compareStrings = await bcrypt.compareSync(hashedResetString, resetString)
+
+  if(!compareStrings){
+    res.json({
+      message: "Invalid unique string"
+    })
+  }
+  try {
+    const newPassword = await bcrypt.hash(password, 10)
+    if(!newPassword){
+      console.log(error)
+      res.status(500).json({
+        message: "Internal Server Error"
+      })
+    }
+    await UserSchema.updateOne(
+      {_id: userId},
+      {password: newPassword},
+      (err, data) => {
+        if(err){
+          console.log(err)
+          res.json({
+            message: "Internal Server Error"
+          })
+        }
+       console.log("Password reser done")
+      }
+    ).then(
+      await passwordResetSchema.findByIdAndDelete(userId)
+      .then(
+        res.status(200).json({
+          message: "Password reset complete"
+      }).redirect("/user/signin")
+      )
+     
+    )
+  } catch (error) {
+    console.log(error)
+    res.status(500).json({
+      message: "Internal server error",
+    });
+  }
+}
+
 //PRODUCT
 
 async function createProduct(req, res) {
@@ -233,12 +453,11 @@ async function createProduct(req, res) {
 
   if (!category) return res.status(400).json({ message: "Invalid Category" });
 
+  const file = req.file; //TO check if file exists
 
-  const file = req.file //TO check if file exists
-
-  if(!file) return res.status(400).send("No image in request ")
-  const fileName = file.fileName
-  const basePath = `${req.protocol}://${req.get('host')}/public/upload/` //req.protocol serves http, req.get('host'), serves localhost: PORT
+  if (!file) return res.status(400).send("No image in request ");
+  const fileName = file.fileName;
+  const basePath = `${req.protocol}://${req.get("host")}/public/upload/`; //req.protocol serves http, req.get('host'), serves localhost: PORT
 
   const newProduct = new ProductsSchema({
     title: req.body.title,
@@ -266,25 +485,29 @@ async function createProduct(req, res) {
 
 //to update an image
 
-async function updateImage(req, res){
-  if(!mongoose.isValidObjectId(req.params.id)){
-    return res.status(400).send("Invalid Product Id")
+async function updateImage(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(400).send("Invalid Product Id");
   }
 
-  const id = req.params.id
-  const files = req.files
-  let imagePath = []
-  const basePath = `${req.protocol}://${req.get('host')}/public/upload/`
+  const id = req.params.id;
+  const files = req.files;
+  let imagePath = [];
+  const basePath = `${req.protocol}://${req.get("host")}/public/upload/`;
 
-  if(files) {
-    files.map(file => {
-      imagePath.push(`${basePath}${file.filename}`)
-    })
+  if (files) {
+    files.map((file) => {
+      imagePath.push(`${basePath}${file.filename}`);
+    });
   }
 
-  const product = await ProductsSchema.findOneAndUpdate(id, {
-    images: imagePath
-  }, { new: true })
+  const product = await ProductsSchema.findOneAndUpdate(
+    id,
+    {
+      images: imagePath,
+    },
+    { new: true }
+  );
 }
 
 async function findOneProduct(req, res) {
@@ -550,21 +773,25 @@ async function orderCount(req, res) {
   });
 }
 
-async function getSingleUserOrder(req, res){
-  const id = req.params.id
+async function getSingleUserOrder(req, res) {
+  const id = req.params.id;
 
-  if(!id) return res.status(400).json({ message: "Provide relevant parameters" })
+  if (!id)
+    return res.status(400).json({ message: "Provide relevant parameters" });
 
-  const singleOrder = OrderItem.find({ _id: id }).populate({
-    path: "orderItem", populate: {
-      path: "products", populate: "Category"
-    }
-  }).sort({ "dateOrdered": -1 })
+  const singleOrder = OrderItem.find({ _id: id })
+    .populate({
+      path: "orderItem",
+      populate: {
+        path: "products",
+        populate: "Category",
+      },
+    })
+    .sort({ dateOrdered: -1 });
 
+  if (!singleOrder) return res.status(400).json({ success: false });
 
-  if(!singleOrder) return res.status(400).json({success: false})
-
-  return res.status(200).json({ order: singleOrder })
+  return res.status(200).json({ order: singleOrder });
 }
 
 async function deleteOrder(req, res) {
@@ -756,8 +983,6 @@ const deleteCategory = async (req, res) => {
   }
 };
 
-
-
 //PAYSTACK
 const initiateTransaction = async (req, res) => {
   const id = req.params.id;
@@ -820,7 +1045,6 @@ const initiateTransaction = async (req, res) => {
   }
 };
 
-
 const verifyTransaction = async (req, res) => {
   const { reference, orderId } = req.body;
 
@@ -839,14 +1063,19 @@ const verifyTransaction = async (req, res) => {
 
     if (data.status === "success") {
       // Payment was successful, generate QR code
-      const qrCodeDataUrl = await QRCode.toDataURL(data.authorization_url, { errorCorrectionLevel: 'H' }, (err, data) => {
-        if(err){
-          console.log(err)
-          return res.status(500).send("An error occured while generating qrcode")
-        } 
-        return data
-
-      });
+      const qrCodeDataUrl = await QRCode.toDataURL(
+        data.authorization_url,
+        { errorCorrectionLevel: "H" },
+        (err, data) => {
+          if (err) {
+            console.log(err);
+            return res
+              .status(500)
+              .send("An error occured while generating qrcode");
+          }
+          return data;
+        }
+      );
 
       res.json({
         status: "success",
@@ -869,10 +1098,6 @@ const verifyTransaction = async (req, res) => {
     });
   }
 };
-
-
-
-
 
 module.exports = {
   signIn,
@@ -903,5 +1128,9 @@ module.exports = {
   deleteCategory,
   updateImage,
   initiateTransaction,
-  verifyTransaction
+  verifyTransaction,
+  verifyUser,
+  verifiedUser,
+  passwordReset,
+  verifyPasswordReset
 };

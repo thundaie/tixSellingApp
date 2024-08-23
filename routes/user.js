@@ -8,6 +8,10 @@ const {
   signUp,
   getAllUsers,
   getOneUser,
+  verifyUser,
+  verifiedUser,
+  passwordReset,
+  verifyPasswordReset
 } = require("../controller/controls");
 
 router.get("/", getAllUsers);
@@ -20,4 +24,11 @@ router.post("/signUp", signUpValidator, signUp);
 
 router.put("/update");
 
+router.post("/reset-password", passwordReset)
+
+router.post("/verify-password-reset", verifyPasswordReset)
+
+router.get("/verify/:userId/:uniqueString", verifyUser)
+
+router.get("/verified", verifiedUser)
 module.exports = router;
